@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#101522">
+<meta name="description" content="BOX FIGHT - Red vs Blue multiplayer fighting game">
+<link rel="manifest" href="./manifest.json">
+<title>BOX FIGHT</title>
+
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101522;color:white;font-family:Arial;text-align:center}
+header{padding:12px;background:#080c14;border-bottom:2px solid #30394d}
+h1{margin:4px;letter-spacing:3px}
+.red{color:#ff354f}.blue{color:#3295ff}
+.setup{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;padding:12px}
+input,select{background:#20283a;color:white;border:1px solid #566079;padding:10px;border-radius:7px;width:140px}
+button{border:0;border-radius:8px;padding:12px;color:white;background:#36445f;font-weight:bold;touch-action:none;user-select:none}
+#start{background:#0caa68}#reset{background:#a13e4b}
+.game{max-width:900px;margin:auto;padding:8px}
+.hud{display:flex;gap:10px;text-align:left;font-weight:bold}
+.hud>div{width:50%}
+.health{height:16px;background:#30394d;border-radius:9px;overflow:hidden;margin:5px 0 9px}
+.fill{height:100%;width:100%;transition:width .1s}
+#rh{background:#ff354f}#bh{background:#3295ff}
+canvas{display:block;width:100%;height:auto;background:#141b2b;border:2px solid #485572;border-radius:10px;touch-action:none}
+#message{padding:12px;color:#ffe08a;min-height:40px}
+.controls{display:flex;gap:10px;margin-top:8px}
+.side{width:50%;padding:8px 3px;background:#1b2334;border-radius:10px}
+.side h3{font-size:14px}
+.side p{font-size:11px;color:#aab5cb}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;max-width:220px;margin:auto}
+.pad button{font-size:20px;min-height:48px;padding:4px}
+.empty{visibility:hidden}
+.redbuttons button{background:#a92c40}
+.bluebuttons button{background:#205c9b}
+.attack{background:#b77817!important}
+#connection{font-size:12px;color:#ffd166;padding:8px}
+@media(max-width:380px){.side h3{font-size:11px}.pad button{min-height:42px}}
+</style>
+</head>
+<body>
+
+<header>
+<h1>BOX <span class="red">FIGHT</span></h1>
+<div>🔴 RED VS BLUE 🔵</div>
+</header>
+
+<div class="setup">
+<input id="name" maxlength="12" value="Fighter" aria-label="Your name">
+<select id="role" aria-label="Choose fighter">
+<option value="red">🔴 Red fighter</option>
+<option value="blue">🔵 Blue fighter</option>
+</select>
+<input id="room" maxlength="20" value="BOX1" aria-label="Room code">
+<button id="connect">CONNECT</button>
+<button id="start">START FIGHT</button>
+<button id="reset">RESET</button>
+</div>
+
+<div id="connection">Offline mode · Choose a fighter and connect to play online</div>
+
+<main class="game">
+<div class="hud">
+<div><span class="red" id="rn">RED</span><div class="health"><div class="fill" id="rh"></div></div></div>
+<div><span class="blue" id="bn">BLUE</span><div class="health"><div class="fill" id="bh"></div></div></div>
+</div>
+
+<canvas id="arena" width="800" height="400"></canvas>
+<div id="message">Press START FIGHT to begin!</div>
+
+<div class="controls">
+<section class="side redbuttons">
+<h3 class="red">🔴 RED · PHONE</h3>
+<p>Move, jump, duck, attack</p>
+<div class="pad">
+<button class="empty"></button><button data-action="up">↑</button><button class="empty"></button>
+<button data-action="left">←</button><button data-action="down">↓</button><button data-action="right">→</button>
+<button class="empty"></button><button class="attack" data-action="attack">🥊</button><button class="empty"></button>
+</div>
+</section>
+
+<section class="side bluebuttons">
+<h3 class="blue">🔵 BLUE · TV REMOTE</h3>
+<p>Arrows move · OK/Enter attacks</p>
+<div class="pad">
+<button class="empty"></button><button data-tv="up">↑</button><button class="empty"></button>
+<button data-tv="left">←</button><button data-tv="down">↓</button><button data-tv="right">→</button>
+<button class="empty"></button><button class="attack" data-tv="attack">OK</button><button class="empty"></button>
+</div>
+</section>
+</div>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const canvas=$("arena"),ctx=canvas.getContext("2d");
+const W=800,H=400,FLOOR=330;
+
+let ws=null,connected=false,running=false,over=false;
+let role="red",room="BOX1",playerName="Fighter";
+let lastFrame=0,lastSend=0;
+const held={red:new Set(),blue:new Set()};
+const names={red:"RED",blue:"BLUE"};
+const players={};
+
+function makePlayer(id,x,color,facing){
+ return {id,x,y:FLOOR-65,w:44,h:65,color,facing,
+ vx:0,vy:0,hp:100,ground:true,crouch:false,
+ attack:0,cooldown:0,hurt:0};
+}
+function resetState(){
+ players.red=makePlayer("red",180,"#ff354f",1);
+ players.blue=makePlayer("blue",620,"#3295ff",-1);
+ held.red.clear();held.blue.clear();
+ running=false;over=false;
+ updateHUD();draw();
+}
+function updateHUD(){
+ $("rh").style.width=players.red.hp+"%";
+ $("bh").style.width=players.blue.hp+"%";
+ $("rn").textContent=names.red;
+ $("bn").textContent=names.blue;
+}
+function send(data){
+ if(ws&&ws.readyState===WebSocket.OPEN){
+  ws.send(JSON.stringify(data));
+ }
+}
+function broadcastAction(action,down){
+ send({type:"control",role,action,down});
+}
+function join(){
+ role=$("role").value;
+ room=$("room").value.trim()||"BOX1";
+ playerName=$("name").value.trim()||role.toUpperCase();
+ names[role]=playerName;
+ updateHUD();
+
+ if(ws)ws.close();
+
+ /*
+  * Set this to your secure WebSocket server.
+  * GitHub Pages generally requires wss://, not ws://.
+  */
+ const server=prompt("Enter your secure WebSocket address (wss://...)");
+ if(!server)return;
+
+ try{ws=new WebSocket(server)}catch(e){
+  $("connection").textContent="Invalid server address";return;
+ }
+
+ $("connection").textContent="Connecting...";
+ ws.onopen=()=>{
+  connected=true;
+  send({type:"join",room,role,name:playerName});
+  $("connection").textContent="Connected · Room "+room;
+ };
+ ws.onmessage=e=>{
+  let d;
+  try{d=JSON.parse(e.data)}catch{return}
+  if(d.type==="joined"){
+   $("connection").textContent="Connected · Room "+room;
+  }
+  if(d.type==="control"&&d.role!==role){
+   if(d.name)names[d.role]=d.name;
+   if(d.down)held[d.role].add(d.action);
+   else held[d.role].delete(d.action);
+  }
+  if(d.type==="start"){
+   resetState();running=true;over=false;
+   $("message").textContent="FIGHT! 🥊";
+  }
+  if(d.type==="reset"){resetState()}
+ };
+ ws.onclose=()=>{
+  connected=false;
+  $("connection").textContent="Disconnected · Offline game available";
+ };
+ ws.onerror=()=>{
+  $("connection").textContent="Connection failed · Check server and network";
+ };
+}
+$("connect").onclick=join;
+
+function startFight(){
+ if(connected)send({type:"start",role});
+ resetState();
+ running=true;
+ $("message").textContent="FIGHT! 🥊";
+}
+function resetFight(){
+ if(connected)send({type:"reset",role});
+ resetState();
+ $("message").textContent="Press START FIGHT to begin!";
+}
+$("start").onclick=startFight;
+$("reset").onclick=resetFight;
+
+function control(action,down){
+ if(!["left","right","up","down","attack"].includes(action))return;
+ const p=players[role];
+ if(!p)return;
+
+ if(down){
+  if(held[role].has(action))return;
+  held[role].add(action);
+  if(action==="up"&&running&&p.ground){
+   p.vy=-470;p.ground=false;
+  }
+  if(action==="attack"&&running&&!over)attack(p,players[role==="red"?"blue":"red"]);
+ }else held[role].delete(action);
+
+ if(connected)broadcastAction(action,down);
+}
+
+document.querySelectorAll("[data-action]").forEach(b=>{
+ const action=b.dataset.action;
+ b.addEventListener("pointerdown",e=>{
+  e.preventDefault();
+  b.setPointerCapture?.(e.pointerId);
+  control(action,true);
+ });
+ const up=e=>{e.preventDefault();control(action,false)};
+ b.addEventListener("pointerup",up);
+ b.addEventListener("pointercancel",up);
+ b.addEventListener("lostpointercapture",up);
+});
+
+document.querySelectorAll("[data-tv]").forEach(b=>{
+ const action=b.dataset.tv;
+ b.addEventListener("click",()=>control(action,true));
+});
+
+document.addEventListener("keydown",e=>{
+ if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT")return;
+ const map={ArrowLeft:"left",ArrowRight:"right",ArrowUp:"up",ArrowDown:"down",Enter:"attack"," ":"attack"};
+ const action=map[e.key];
+ if(action){e.preventDefault();control(action,true)}
+});
+document.addEventListener("keyup",e=>{
+ const map={ArrowLeft:"left",ArrowRight:"right",ArrowUp:"up",ArrowDown:"down",Enter:"attack"," ":"attack"};
+ if(map[e.key])control(map[e.key],false);
+});
+window.addEventListener("blur",()=>{
+ for(const id of ["red","blue"]){
+  for(const action of held[id])if(id===role)broadcastAction(action,false);
+  held[id].clear();
+ }
+});
+
+function attack(a,d){
+ if(a.cooldown>0)return;
+ a.attack=.2;a.cooldown=.48;
+ const dx=(d.x+d.w/2)-(a.x+a.w/2);
+ if(dx*a.facing>0&&Math.abs(dx)<95&&
+    a.y<d.y+d.h&&a.y+a.h>d.y){
+  d.hp=Math.max(0,d.hp-10);
+  d.hurt=.18;d.vx=a.facing*210;d.vy=-110;
+  updateHUD();
+  $("message").textContent=names[a.id]+" landed a hit!";
+  if(d.hp<=0){
+   over=true;running=false;
+   $("message").textContent="🏆 "+names[a.id]+" WINS!";
+  }
+ }
+}
+
+function updatePlayer(p,dt){
+ const h=held[p.id];
+ p.crouch=h.has("down")&&p.ground;
+ const speed=p.crouch?80:210;
+ p.vx=h.has("left")&&!h.has("right")?-speed:
+      h.has("right")&&!h.has("left")?speed:0;
+ if(p.vx)p.facing=Math.sign(p.vx);
+ p.x=Math.max(10,Math.min(W-p.w-10,p.x+p.vx*dt));
+ p.vy+=1150*dt;p.y+=p.vy*dt;
+ if(p.y+p.h>=FLOOR){p.y=FLOOR-p.h;p.vy=0;p.ground=true}
+ else p.ground=false;
+ p.attack=Math.max(0,p.attack-dt);
+ p.cooldown=Math.max(0,p.cooldown-dt);
+ p.hurt=Math.max(0,p.hurt-dt);
+}
+
+function drawPlayer(p){
+ const height=p.crouch?44:p.h,y=p.y+p.h-height;
+ ctx.fillStyle=p.hurt>0?"white":p.color;
+ ctx.fillRect(p.x,y,p.w,height);
+ ctx.fillStyle="white";
+ ctx.fillRect(p.facing===1?p.x+p.w-14:p.x+6,y+13,7,7);
+ ctx.fillStyle="#101522";
+ ctx.fillRect(p.facing===1?p.x+p.w-11:p.x+7,y+15,3,3);
+ if(!p.crouch){
+  ctx.fillStyle="#dbe4f5";
+  ctx.fillRect(p.x+5,y+48,12,17);
+  ctx.fillRect(p.x+27,y+48,12,17);
+ }
+ if(p.attack>0){
+  ctx.fillStyle="#ffe08a";
+  ctx.fillRect(p.facing===1?p.x+p.w:p.x-34,y+23,34,12);
+ }
+ ctx.fillStyle="white";ctx.font="bold 13px Arial";
+ ctx.textAlign="center";ctx.fillText(names[p.id],p.x+p.w/2,y-10);
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ const g=ctx.createLinearGradient(0,0,0,H);
+ g.addColorStop(0,"#202c47");g.addColorStop(1,"#101522");
+ ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ for(let i=0;i<8;i++){
+  ctx.fillStyle=i%2?"rgba(50,149,255,.1)":"rgba(255,53,79,.1)";
+  ctx.fillRect(i*105,0,3,FLOOR);
+ }
+ ctx.fillStyle="#303b51";ctx.fillRect(0,FLOOR,W,H-FLOOR);
+ ctx.fillStyle="#66738b";ctx.fillRect(0,FLOOR,W,4);
+ ctx.strokeStyle="#485572";
+ for(let x=25;x<W;x+=50){
+  ctx.beginPath();ctx.moveTo(x,FLOOR+20);ctx.lineTo(x-12,H);ctx.stroke();
+ }
+ ctx.setLineDash([7,9]);ctx.beginPath();
+ ctx.moveTo(W/2,20);ctx.lineTo(W/2,FLOOR);ctx.stroke();
+ ctx.setLineDash([]);
+ drawPlayer(players.red);drawPlayer(players.blue);
+ if(!running&&!over){
+  ctx.fillStyle="rgba(8,12,20,.55)";ctx.fillRect(190,125,420,80);
+  ctx.fillStyle="white";ctx.font="bold 28px Arial";ctx.textAlign="center";
+  ctx.fillText("READY TO FIGHT?",W/2,160);
+  ctx.font="15px Arial";ctx.fillText("Press START FIGHT",W/2,187);
+ }
+}
+function loop(t){
+ const dt=Math.min((t-lastFrame)/1000||0,.03);lastFrame=t;
+ if(running&&!over){
+  updatePlayer(players.red,dt);
+  updatePlayer(players.blue,dt);
+  updateHUD();
+ }
+ draw();
+ requestAnimationFrame(loop);
+}
+resetState();
+requestAnimationFrame(loop);
+
+if("serviceWorker" in navigator){
+ window.addEventListener("load",()=>{
+  navigator.serviceWorker.register("./sw.js").catch(console.error);
+ });
+}
+</script>
+</body>
+  </html>
