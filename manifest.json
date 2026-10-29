@@ -1,0 +1,12 @@
+{
+  "name": "BOX FIGHT",
+  "short_name": "BOX FIGHT",
+  "description": "Red vs Blue fighting game",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#101522",
+  "theme_color": "#101522",
+  "icons": []
+}
